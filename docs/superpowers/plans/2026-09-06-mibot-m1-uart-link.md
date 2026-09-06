@@ -34,6 +34,12 @@
 - 设备侧 RxLoop 全部帧统一走 `frags_.Feed()`（非分片直通），单一分发入口（Task 4 评审建议，已并入 Task 6 计划代码）。
 - 链起点处 `reserve(min(est,64KB))` 仍可能被恶意首分片（total=255 + 4096B payload）触发一次 64KB 连续分配，`-fno-exceptions` 下分配失败即 abort——M2 移除预留（vector 增长摊销足够）以彻底消除该 abort 向量。
 
+**Task 6-8 合并评审遗留（不阻塞 M1，M2 计划必须落实）**：
+- `TelemetryLoop` 未按 `ready_` 门控：上电即 1Hz 遥测，先于 HELLO 握手。M1 无害（spec §3.1 会话语义在 SF32 侧过滤），M2 加 `if (!ready_)` 跳过。
+- `TxLoop` 对持久性 `uart_write_bytes` 失败无限重试会堵死单 TX 队列（M1 依赖队列满丢弃减载）。M2 加错误计数/恢复路径。
+- HELLO 未校验 `schema`/`proto_version` 即回 ACK——M2 补协议版本协商后再置 `ready_`。
+- `decoder_.error_count()` 已有 API 但未接入 `mibot show`——接入后诊断命令才可见链路质量。
+
 ---
 
 ## 文件结构
@@ -1192,13 +1198,17 @@ void MibotLinkService::OnFrame(const Frame& frame) {
             // PONG：seq 回写 = PING 的 seq，便于对端测 RTT
             SendJson(mibot::kFramePong, FrameFlags::kAck, frame.seq, "{}");
             break;
-        default:
+        default: {
             // M1 尚无 COMMAND/AI 处理：按《规范》§5.3 回 E_UNSUPPORTED
+            // 帧类型用真 hex 渲染——std::to_string 是十进制，前缀写 "0x" 会撒谎（0x10 显示成 0x16）
+            char type_hex[8];
+            snprintf(type_hex, sizeof(type_hex), "0x%02x", (unsigned)frame.type);
             SendJson(mibot::kFrameNack, FrameFlags::kError, frame.seq,
                      std::string("{\"schema\":\"mibot.uart.v1\",\"error\":{\"code\":\"E_UNSUPPORTED\","
-                                 "\"message\":\"type 0x") + std::to_string(frame.type) + " not supported in fw " +
+                                 "\"message\":\"type ") + type_hex + " not supported in fw " +
                      MIBOT_FW_VERSION + "\"}}");
             break;
+        }
     }
 }
 
