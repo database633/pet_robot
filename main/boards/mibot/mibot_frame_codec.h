@@ -7,6 +7,9 @@
 #include <vector>
 
 namespace mibot {
-// Task 2-4 填充
+// CRC-16/CCITT-FALSE（覆盖 VERSION..PAYLOAD）
+uint16_t Crc16(const uint8_t* data, size_t len);
+// 增量式：先算前段，再续算后段（帧头与 payload 分离存储时用）
+uint16_t Crc16Update(uint16_t crc, const uint8_t* data, size_t len);
 }  // namespace mibot
 #endif  // MIBOT_FRAME_CODEC_H
