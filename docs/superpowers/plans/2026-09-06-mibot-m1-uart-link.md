@@ -26,6 +26,10 @@
 - M1 不提供链路 Stop/重启（与板卡同生命周期）；M2 若需错误恢复，按 `running_` 标志 + 任务自退出方式补。
 - **首次配网入口缺失**：M1 板卡无按键无屏幕，NVS 无 Wi-Fi 凭据时无法进入/完成配网（xiaozhi 配网靠板卡按钮触发）。M1 验证用预烧录凭据（`idf.py monitor` 下临时方案或提前 `nvs` 写入）；M2 必须补配网通道（UART 命令触发配网或保留 BOOT 键）。
 
+**Task 3 质量评审遗留（不阻塞 M1，M2 计划必须落实）**：
+- 帧解码器丢弃假头时不回退重扫：完整假 SOF（AA 55 + 恰能通过版本/长度校验的假头）会吞掉后续真实帧字节且不计数，噪声流下 C++ 端与 Python 对端可能丢不同的帧 → M2 补对等重扫。
+- SEQ 单调性检查（设计 spec 中 frame_codec 职责之一）未纳入 M1 → M2 落实。
+
 ---
 
 ## 文件结构
@@ -565,7 +569,7 @@ bool FrameDecoder::PopFrame(Frame& out) {
 - [ ] **Step 4: 运行确认通过**
 
 Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Wall -Wextra -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
-Expected: `9 tests passed`。
+Expected: `10 tests passed`。（原计划 9 个；Task 2 评审补充了 `test_crc_split_equivalence`，故为 10。）
 
 - [ ] **Step 5: Commit**
 
@@ -768,7 +772,9 @@ void FragmentReassembler::Reset() {
 - [ ] **Step 4: 运行确认通过**
 
 Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Wall -Wextra -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
-Expected: `13 tests passed`。
+Expected: `16 tests passed`。（Task 3 末 10 个 + 本任务 4 个 + Task 3 修复提交追加 2 个。）
+
+> 注：修复提交在 Task 3 与 Task 4 之间落了一个含 2 个新测试的提交（空 payload 回环、逐字节喂入），故本任务结束时总数为 16 而非 13。
 
 - [ ] **Step 5: Commit**
 
@@ -1613,7 +1619,7 @@ git add -A && git commit -m "mibot: M1 verified end-to-end against PC peer (hell
 ```bash
 # 全部宿主测试（Tasks 1-4）：规范入口（本机无 cmake，用 zig；CMakeLists.txt 仅作可移植备份）
 "D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Wall -Wextra -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe
-# 预期最终输出：13 tests passed
+# 预期最终输出：16 tests passed
 ```
 
 ## 后续计划（不在本文件）
