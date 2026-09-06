@@ -218,3 +218,30 @@ static void test_fragment_long_chain_no_timeout() {
     EXPECT_TRUE(out.payload == big);
 }
 MIBOT_TEST(test_fragment_long_chain_no_timeout)
+
+static void test_fragment_single_fragment() {
+    auto frags = MakeFragments(3, std::vector<uint8_t>(500, 0x5A), 500);
+    EXPECT_EQ(frags.size(), 1u);  // 恰好一片即 total=1 退化链
+    FragmentReassembler r;
+    Frame out;
+    EXPECT_TRUE(r.Feed(frags[0], 0, out));
+    EXPECT_TRUE(out.payload == std::vector<uint8_t>(500, 0x5A));
+    EXPECT_EQ(out.seq, 3);
+    EXPECT_EQ(out.flags, 0);
+}
+MIBOT_TEST(test_fragment_single_fragment)
+
+static void test_fragment_over_cap_rejected() {
+    // total=17 × 4000B ≈ 68KB > 64KB 上限：到达上限即弃链，不得重组出超限帧
+    std::vector<uint8_t> big(68000);
+    for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<uint8_t>(i & 0xFF);
+    auto frags = MakeFragments(9, big, 4000);
+    FragmentReassembler r;
+    Frame out;
+    bool completed = false;
+    for (size_t i = 0; i < frags.size(); ++i) {
+        if (r.Feed(frags[i], static_cast<uint32_t>(i), out)) completed = true;
+    }
+    EXPECT_TRUE(!completed);
+}
+MIBOT_TEST(test_fragment_over_cap_rejected)

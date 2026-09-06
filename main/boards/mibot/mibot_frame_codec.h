@@ -87,7 +87,8 @@ public:
     static constexpr uint32_t kFragmentTimeoutMs = 500;  // 相邻分片最大静默间隔
     static constexpr size_t kMaxAssembled = 64 * 1024;
 
-    // 返回 true 表示 assembled 是完整帧（重组完成或非分片直通）
+    // 返回 true 表示 assembled 是完整帧（重组完成或非分片直通）；返回 false 时 assembled 保证未被修改。
+    // 单任务调用（设备侧 RX 任务），非线程安全。
     bool Feed(const Frame& frag, uint32_t now_ms, Frame& assembled);
     void Reset();
 

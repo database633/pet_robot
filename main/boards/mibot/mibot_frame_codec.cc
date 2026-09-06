@@ -156,10 +156,14 @@ bool FragmentReassembler::Feed(const Frame& frag, uint32_t now_ms, Frame& assemb
         received_ = 0;
         data_.clear();
         size_t est = static_cast<size_t>(total) * frag.payload.size();
-        data_.reserve(est > kMaxAssembled ? kMaxAssembled : est);  // 封顶，防畸形 total 撑爆内存
+        data_.reserve(est > kMaxAssembled ? kMaxAssembled : est);  // 预留封顶仅限制单次 reserve；真实上限由下方 growth guard 强制
     }
     if (index != received_) {  // 只支持按序（UART 保证有序）
         Reset();
+        return false;
+    }
+    if (data_.size() + (frag.payload.size() - 2) > kMaxAssembled) {
+        Reset();  // 超 64KB 上限：弃链（spec §3.1 E_PAYLOAD_TOO_LARGE 的设备侧强制点）
         return false;
     }
     data_.insert(data_.end(), frag.payload.begin() + 2, frag.payload.end());
