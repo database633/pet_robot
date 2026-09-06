@@ -12,5 +12,11 @@ add_executable(test_mibot
 )
 target_include_directories(test_mibot PRIVATE ${MIBOT_BOARD_DIR} ${CMAKE_CURRENT_LIST_DIR})
 
+if(MSVC)
+    target_compile_options(test_mibot PRIVATE /W4)
+else()
+    target_compile_options(test_mibot PRIVATE -Wall -Wextra)
+endif()
+
 enable_testing()
 add_test(NAME mibot COMMAND test_mibot)
