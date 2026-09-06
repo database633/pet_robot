@@ -175,11 +175,17 @@ namespace mibot {
 }  // namespace mibot
 ```
 
-- [ ] **Step 4: 配置并构建**
+- [ ] **Step 4: 构建并运行**
 
-Run: `cmake -S test/host -B test/host/build && cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`
-Expected: `1 tests passed`，ctest PASS。
-（多配置生成器如 VS 需在 build/ctest 后加 `--config Release` / `-C Release`。）
+**规范入口（本机实际验证过）：**
+
+```bash
+"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe
+```
+
+Expected: `1 tests passed`，exit 0。（必须编译全部 3 个 TU：test_main、test_frame_codec、mibot_frame_codec。）
+
+备选（有 cmake 的机器）：`cmake -S test/host -B test/host/build && cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`。
 
 - [ ] **Step 5: Commit**
 
@@ -226,7 +232,7 @@ MIBOT_TEST(test_crc_empty)
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`
+Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
 Expected: 编译失败——`Crc16` 未定义。
 
 - [ ] **Step 3: 实现**
@@ -261,7 +267,7 @@ uint16_t Crc16(const uint8_t* data, size_t len) {
 
 - [ ] **Step 4: 运行确认通过**
 
-Run: `cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`
+Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
 Expected: `3 tests passed`，ctest PASS。
 
 - [ ] **Step 5: Commit**
@@ -375,7 +381,7 @@ MIBOT_TEST(test_oversize_length_dropped)
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`
+Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
 Expected: 编译失败——`Frame`/`EncodeFrame`/`FrameDecoder` 未定义。
 
 - [ ] **Step 3: 实现**
@@ -558,7 +564,7 @@ bool FrameDecoder::PopFrame(Frame& out) {
 
 - [ ] **Step 4: 运行确认通过**
 
-Run: `cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`
+Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
 Expected: `9 tests passed`，ctest PASS。
 
 - [ ] **Step 5: Commit**
@@ -663,7 +669,7 @@ MIBOT_TEST(test_fragment_long_chain_no_timeout)
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`
+Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
 Expected: 编译失败——`FragmentReassembler` 未定义。
 
 - [ ] **Step 3: 实现**
@@ -761,7 +767,7 @@ void FragmentReassembler::Reset() {
 
 - [ ] **Step 4: 运行确认通过**
 
-Run: `cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure`
+Run: `"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe`
 Expected: `13 tests passed`，ctest PASS。
 
 - [ ] **Step 5: Commit**
@@ -787,8 +793,8 @@ git commit -m "mibot: in-order fragment reassembly with inactivity timeout and s
 `main/boards/mibot/mibot_config.h`：
 
 ```cpp
-#ifndef _MIBOT_CONFIG_H_
-#define _MIBOT_CONFIG_H_
+#ifndef MIBOT_CONFIG_H
+#define MIBOT_CONFIG_H
 
 #include <driver/gpio.h>
 
@@ -804,7 +810,7 @@ git commit -m "mibot: in-order fragment reassembly with inactivity timeout and s
 
 #define MIBOT_FW_VERSION    "0.1.0"
 
-#endif  // _MIBOT_CONFIG_H_
+#endif  // MIBOT_CONFIG_H
 ```
 
 - [ ] **Step 2: 写板卡类**
@@ -907,8 +913,8 @@ git commit -m "mibot: board skeleton registered as BOARD_TYPE_MIBOT_ESP32S3"
 `main/boards/mibot/mibot_uart_link.h`：
 
 ```cpp
-#ifndef _MIBOT_UART_LINK_H_
-#define _MIBOT_UART_LINK_H_
+#ifndef MIBOT_UART_LINK_H
+#define MIBOT_UART_LINK_H
 
 #include <atomic>
 #include <functional>
@@ -1065,8 +1071,8 @@ git commit -m "mibot: uart link rx/tx tasks with frame decoder and fragment reas
 `main/boards/mibot/mibot_link_service.h`：
 
 ```cpp
-#ifndef _MIBOT_LINK_SERVICE_H_
-#define _MIBOT_LINK_SERVICE_H_
+#ifndef MIBOT_LINK_SERVICE_H
+#define MIBOT_LINK_SERVICE_H
 
 #include <atomic>
 #include <string>
@@ -1605,8 +1611,8 @@ git add -A && git commit -m "mibot: M1 verified end-to-end against PC peer (hell
 ## 宿主测试快速参考
 
 ```bash
-# 全部宿主测试（Tasks 1-4）
-cmake -S test/host -B test/host/build && cmake --build test/host/build && ctest --test-dir test/host/build --output-on-failure
+# 全部宿主测试（Tasks 1-4）：规范入口（本机无 cmake，用 zig；CMakeLists.txt 仅作可移植备份）
+"D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe
 # 预期最终输出：13 tests passed
 ```
 
