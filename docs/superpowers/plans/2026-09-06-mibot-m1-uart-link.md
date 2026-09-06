@@ -1623,7 +1623,7 @@ git add -A && git commit -m "mibot: M1 verified end-to-end against PC peer (hell
 ```bash
 # 全部宿主测试（Tasks 1-4）：规范入口（本机无 cmake，用 zig；CMakeLists.txt 仅作可移植备份）
 "D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Wall -Wextra -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe
-# 预期最终输出：19 tests passed（Task 4 修复提交追加 3 个：单分片链、超限弃链、故 16+3）
+# 预期最终输出：18 tests passed（Task 4 修复提交追加 2 个：单分片链、超限弃链，故 16+2）
 ```
 
 ## 后续计划（不在本文件）
