@@ -4,6 +4,8 @@
 #include "codecs/dummy_audio_codec.h"
 
 #include "mibot_config.h"
+#include "mibot_uart_link.h"
+#include "mibot_link_service.h"
 
 #define TAG "MibotBoard"
 
@@ -13,10 +15,13 @@
 class MibotBoard : public WifiBoard {
 private:
     DummyAudioCodec codec_{AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE};
+    mibot::MibotUartLink uart_link_;
+    MibotLinkService link_service_;
 
 public:
     MibotBoard() {
         ESP_LOGI(TAG, "Mibot ESP32-S3 board init, fw=%s", MIBOT_FW_VERSION);
+        link_service_.Start(uart_link_);  // M1：链路服务随板卡启动（不依赖 Wi-Fi）
     }
 
     ~MibotBoard() override = default;
