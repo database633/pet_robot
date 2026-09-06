@@ -839,6 +839,8 @@ elseif(CONFIG_BOARD_TYPE_LCDWIKI_ES3C35P)
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_128)
+elseif(CONFIG_BOARD_TYPE_MIBOT_ESP32S3)
+    set(BOARD_DIR "mibot")
 endif()
 
 if(NOT BOARD_DIR AND NOT CMAKE_BUILD_EARLY_EXPANSION)
