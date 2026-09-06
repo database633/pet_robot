@@ -217,9 +217,29 @@ Run(user_text):
 2. `McpServer::AddCommonTools()` 改为：构造内部 `ToolRegistry` → 调 `RegisterCommonTools()` → 将 `ToolDef` 适配为现有 `McpTool` 对象（`ToolDef::parameters_json` 直接作为 `McpTool::to_json()` 的 `inputSchema`，两者同构）。板卡自定义工具走原 `AddTool` 路径不受影响。
 3. DeviceAgent 持有自己的 `ToolRegistry` 实例，同样调 `RegisterCommonTools()`；若板卡侧将来提供 `RegisterBoardTools(ToolRegistry&)` 钩子则两边同时受益（v1 只保证公共四件套共享）。
 
-`Execute` 语义：`Find` 失败 → `"Error: unknown tool <name>"`；`cJSON_Parse(arguments)` 失败 → `"Error: invalid arguments"`；回调抛异常 → `catch(...)` → `"Error: <what>"`。结果统一为文本（OpenAI tool 消息的 content 即字符串，无需分类型）。执行期间分段检查 `cancel` 并施加 per-tool 超时（默认 5s）——本地工具用不到，但这是远程工具（下）能安全接入的前提，也是 barge-in 在工具执行阶段仍然生效的前提。
+`Execute` 语义（返回统一采用 §4.5.1 的 Mibot 信封）：工具回调返回结构化结果，registry 序列化为信封 JSON 文本作为 tool 消息 content 回填模型——成功 `{"ok":true,"command_id":"...","state":"completed","result":{...},"error":null}`；未知工具 → `state:"rejected"` + `error.code:"E_UNSUPPORTED"`；参数缺失/非法 → `E_INVALID_ARG`；回调抛异常 → `error.message` 携带摘要。模型依据错误码自我纠正（如收到 `E_SAFETY_LOCK` 应停止移动并向用户解释）。`command_id` 由 registry 生成作幂等键，per-tool 超时映射为 `expires_at`。执行期间分段检查 `cancel` 并施加 per-tool 超时（默认 5s）——本地工具用不到，但这是远程工具（下）与秒级运动动作能安全接入的前提，也是 barge-in 在工具执行阶段仍然生效的前提。
 
 **远程工具扩展点（设备作为 MCP Client，v2）**：`ToolDef` 的执行形态统一为"入参 JSON → 结果文本"，天然可封装远程调用——`RegisterRemoteMcpTools(registry, endpoint)`（v2）对远端 MCP 服务器（Streamable HTTP 传输，本质为 HTTP POST + JSON-RPC）执行 `initialize`/`tools/list`，将每个远程工具包装为一个 `ToolDef`，其 callback 内完成 `tools/call` 并取回文本结果。**对 loop 与模型而言远程工具与本地工具完全同构，loop 零改动**。代价是远程工具为秒级耗时，故依赖 `Execute` 的超时与 cancel（见上）。工具容量预算：`SerializeOpenAiTools()` 输出 ≤8KB（约 32 个工具），超限拒绝注册并经串口告警——防止远端工具目录撑爆请求体与 token 成本。
+
+#### 4.5.1 Mibot 机器人工具集（对齐《Mibot 桌面机器人状态机与控制接口规范》§4）
+
+安全原则（规范 §0/§4，不可协商）：模型只能表达**高层意图**——工具参数只含目标速度/角度/时长，不含 PWM、寄存器、I²C 地址；限幅、TTL、ToF 边缘保护、急停全部由 ESP32 本地安全状态机执行，任何模型输出都不能关闭 `avoid_edge`；"模型生成了 Tool Call" ≠ "已执行"，回填给模型的必须是真实执行结果（`ACK completed`），表情显示真实状态而非发送状态（规范 §1.1/§7）。
+
+信封与错误码沿用规范 §4.1/§5.3：`E_INVALID_ARG` / `E_EXPIRED` / `E_DUPLICATE` / `E_BUSY` / `E_SAFETY_LOCK` / `E_TOF_INVALID` / `E_MOTOR_STALL` / `E_SERVO_LIMIT` / `E_LOW_BATTERY` / `E_UART_TIMEOUT` / `E_CLOUD_TIMEOUT` / `E_PROTOCOL_CRC` / `E_UNSUPPORTED`。
+
+| 工具 | 参数要点（Schema 内置 min/max，模型自限幅） | 执行归属 |
+|---|---|---|
+| `robot.get_status` | 无参 | 返回 behavior/motion 状态、`tof`、`battery_mv`、`motor`、`servo`、`last_event` |
+| `robot.move` | `linear_mm_s` −120..120、`angular_deg_s` −90..90、`duration_ms` 50..5000（默认 500）、`direction` | 本地运动安全状态机 |
+| `robot.rotate` | `angle_deg`、`speed_deg_s`、`timeout_ms`；无编码器时结果带 `estimated=true` | 本地运动安全状态机 |
+| `robot.stop` | `reason`、`emergency`（true → 最高优先级刹车，不等待当前动作） | 本地运动安全状态机 |
+| `robot.set_arm_pose` | `left_deg/right_deg` 0..180（按机械限位收紧）、`duration_ms`、`hold_ms`；`E_SERVO_POWER` 后不得重试 | 本地运动安全状态机 |
+| `robot.set_expression` | `name` ∈ {idle, listening, thinking, happy, confused, speaking, warning, error}、`duration_ms`、`intensity` | 双 MCU：SF32 LCD；单 MCU：本机 `Display` |
+| `robot.speak` | `text` ≤500 字、`voice`、`interruptible` | v1 无 TTS：映射为屏幕显示并如实返回；接入 TTS 后由 ESP32 请求、SF32 播放 |
+| `robot.capture_image` | `purpose`、`width`、`height`、`quality`；按需拍照，JPEG 上云后返回结构化视觉结果 | ESP32 相机 + 云端视觉 |
+| `robot.read_floor_sensors` | 无参，诊断用；不能据此关闭边缘保护 | 本地 ToF 读取 |
+
+工程归属：`robot.*` **不进** `RegisterCommonTools()` 公共集，由 Mibot 板卡目录（`main/boards/mibot/`：底盘/ToF/舵机驱动 + 运动安全状态机 + 工具注册）以板级工具形式注册——与 xiaozhi 既有"板卡自带工具"机制一致；通用板卡仍注册公共四件套。工具回调内部要么直接调本地安全状态机 API（单 MCU），要么封装为 UART `COMMAND` 帧（0x10/0x11：幂等 `command_id`、`expires_at`、ACK/NACK）——对 ToolRegistry 透明。并发约束（规范 §6"运动 Tool 不并发"）由 loop 的串行执行天然满足；打断后新回合的运动命令到达时由设备端先收尾旧动作（安全状态机职责）。表情通道统一：Mibot 板卡上禁用 §4.7 的 `[emotion:...]` 标记机制，表情一律由 `robot.set_expression` 工具或真实执行状态驱动；通用板卡保留标记机制。
 
 ### 4.6 AsrClient
 
@@ -265,7 +285,7 @@ Display 消费（只调现有接口）：
 
 - ASR 文本：`SetChatMessage("user", text)`
 - 工具调用：`SetStatus("🔧 self.audio_speaker.set_volume(50)")`（kToolCall/kToolResult 事件）
-- 最终回复：`SetChatMessage("assistant", reply)`；情绪：`SetEmotion(...)`（由 system prompt 约定模型在回复尾部附 `[emotion:happy]` 类标记，解析后剥离；失败则用默认表情，不阻塞）
+- 最终回复：`SetChatMessage("assistant", reply)`；情绪：`SetEmotion(...)`（由 system prompt 约定模型在回复尾部附 `[emotion:happy]` 类标记，解析后剥离；失败则用默认表情，不阻塞。Mibot 板卡上禁用该标记机制，见 §4.5.1）
 - 提示音：`PlaySound` 沿用现有 `Lang::Sounds` 资源
 
 打断（barge-in 替代逻辑，纯取消无音频清理）：
@@ -357,7 +377,7 @@ agent test "帮我把音量调到50"   # 跳过语音直接跑一轮 loop（M1 �
 1. **loop 状态机**：mock transport 回放脚本——①纯文本→1 轮结束；②先 tool_call 后文本→2 轮；③连续 8 次工具调用→兜底；④transport 报错→kError；⑤cancel 置位→kAborted 且 user 消息回滚。
 2. **历史裁剪**：构造超 32KB 历史 → 断言裁剪按完整轮次、system 保留、无悬空 tool_call_id。
 3. **序列化**：`SerializeRequest()` 输出与 §4.4 规则快照比对（含 assistant 带 tool_calls、tool 消息回填）。
-4. **ToolRegistry::Execute**：未知工具 / arguments 非法 JSON / 回调抛异常 / 正常返回，四种结果文本。
+4. **ToolRegistry::Execute**：未知工具（`E_UNSUPPORTED`）/ arguments 非法 JSON（`E_INVALID_ARG`）/ 回调抛异常 / 正常返回信封，各结果文本快照比对；参数超界（如 `linear_mm_s=500`）被 Schema 限幅拒绝；`command_id` 幂等。
 5. **WAV 头构造**（`asr_client` 中抽出纯函数 `BuildWavHeader`）：44 字节逐字段断言。
 
 运行：`cmake -S test/host -B test/host/build && cmake --build ... && ctest`；CI 可选接入。
@@ -378,7 +398,7 @@ agent test "帮我把音量调到50"   # 跳过语音直接跑一轮 loop（M1 �
 | **M1** | `agent_types/context/tool_registry/llm_transport/llm_openai/agent_loop` + 串口 `agent test` 命令 + ToolRegistry 共享重构 + 宿主端单测 | 串口输入"把音量调到50"→设备实际改音量→串口返回确认文本；宿主测试全绿；官方服务器模式烧录回归正常 |
 | **M2** | `asr_client` + DeviceAgent 编排 + 状态机/Display 接入 + Kconfig 分流 | 语音提问→屏幕出 ASR 与回复；全程无串口参与 |
 | **M3** | 打断、错误矩阵全项、资源防御 | §8.2 M3 行通过；错误矩阵逐项人工触发通过 |
-| **M4** | 串口配置命令完善、扩展工具（`self.camera.take_photo`+视觉描述工具、可选联网搜索工具）、`kDeviceStateThinking` 动效 | 新工具经 loop 实际调用成功；配置命令文档化 |
+| **M4** | 串口配置命令完善、Mibot 机器人工具集（§4.5.1，需 Mibot 板卡硬件：`main/boards/mibot/`）、拍照/视觉工具、`kDeviceStateThinking` 动效 | `robot.move/stop/set_arm_pose` 经 loop 实际调用且限幅/TTL/急停生效；新工具经 loop 实际调用成功；配置命令文档化 |
 
 ## 10. 风险与缓解
 
@@ -409,6 +429,7 @@ agent test "帮我把音量调到50"   # 跳过语音直接跑一轮 loop（M1 �
 ```
 新增  main/agent/                    （8 个模块，见 §4.1）
 新增  test/host/                     （宿主端测试）
+新增  main/boards/mibot/             （M4 可选：机器人板卡，驱动 + 运动安全状态机 + robot.* 工具注册，见 §4.5.1）
 修改  main/Kconfig.projbuild         （+1 menu）
 修改  main/CMakeLists.txt            （SRCS 追加）
 修改  main/application.cc            （2 处按开关分流，见 §3#3#4）
