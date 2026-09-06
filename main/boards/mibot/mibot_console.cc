@@ -55,7 +55,9 @@ static void ConsoleTaskEntry(void*) {
 }
 
 void StartConsoleTaskAsync() {
-    xTaskCreate(ConsoleTaskEntry, "mibot_cli", 6144, nullptr, 3, nullptr);
+    // xTaskCreate 成功返回 pdPASS(1) 而非 ESP_OK(0)，转成 esp_err_t 再交给 ESP_ERROR_CHECK
+    BaseType_t cli_ok = xTaskCreate(ConsoleTaskEntry, "mibot_cli", 6144, nullptr, 3, nullptr);
+    ESP_ERROR_CHECK(cli_ok == pdPASS ? ESP_OK : ESP_FAIL);
 }
 
 }  // namespace mibot
