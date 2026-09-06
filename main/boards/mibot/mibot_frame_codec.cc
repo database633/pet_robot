@@ -62,7 +62,7 @@ void FrameDecoder::Feed(const uint8_t* data, size_t len) {
                     state_ = kHeader;
                     header_.clear();
                 } else {
-                    state_ = (byte == kSof0) ? kSync1 : kSync0;  // 0xAA 0xAA 0x55 也能同步
+                    state_ = (byte == kSof0) ? kSync1 : kSync0;  // 真 SOF 前多余的 0xAA 可容忍；完整假 SOF 会吞 7 字节后在下一个 SOF 重同步
                 }
                 break;
             case kHeader:

@@ -52,6 +52,14 @@ std::vector<uint8_t> EncodeFrame(const Frame& frame);
 
 // 字节流解码器：Feed 任意长度字节；完整帧入内部队列，PopFrame 逐个取出。
 // 丢失 SOF → 丢弃至下一个 SOF；VERSION 不符 / LEN > kMaxPayload / CRC 错 → 丢帧并 error_count++
+// 契约：
+//  - 每次 Feed 批次后必须循环 PopFrame 直到返回 false，否则 frames_ 无界增长
+//  - Reset() 清理解析状态与帧队列，但保留 error_count_（生命周期级诊断计数，故意的）
+//  - 非线程安全：Feed/PopFrame 仅限单一任务调用（设备侧为 RX 任务）
+//  - EncodeFrame 前置条件：payload.size() <= 0xFFFF（LEN 字段 16 位；4096 上限由解码端强制）
+//  - 已知限制（spec 固有）：完整假 SOF（AA 55 + 恰能通过版本/长度校验的假头）会吞掉
+//    后续真实帧字节且不计数；丢弃后从下一个 SOF 重新同步。噪声流下 C++ 端与 Python
+//    对端可能丢不同的帧；M2 考虑对等重扫（丢弃假头时回退重扫）。
 class FrameDecoder {
 public:
     void Feed(const uint8_t* data, size_t len);

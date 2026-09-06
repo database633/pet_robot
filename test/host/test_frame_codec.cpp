@@ -113,3 +113,30 @@ static void test_oversize_length_dropped() {
     EXPECT_EQ(d.error_count(), 1u);
 }
 MIBOT_TEST(test_oversize_length_dropped)
+
+static void test_empty_payload_roundtrip() {
+    Frame f = MakeTestFrame(0x77, 0);
+    auto bytes = EncodeFrame(f);
+    EXPECT_EQ(bytes.size(), 11u);
+    FrameDecoder d;
+    d.Feed(bytes.data(), bytes.size());
+    Frame out;
+    EXPECT_TRUE(d.PopFrame(out));
+    EXPECT_TRUE(out.payload.empty());
+    EXPECT_EQ(out.seq, 0x77);
+    EXPECT_EQ(d.error_count(), 0u);
+}
+MIBOT_TEST(test_empty_payload_roundtrip)
+
+static void test_byte_at_a_time_feed() {
+    Frame f = MakeTestFrame(0x88, 37);
+    auto bytes = EncodeFrame(f);
+    FrameDecoder d;
+    for (uint8_t c : bytes) d.Feed(&c, 1);
+    Frame out;
+    EXPECT_TRUE(d.PopFrame(out));
+    EXPECT_TRUE(out.payload == f.payload);
+    EXPECT_EQ(out.seq, 0x88);
+    EXPECT_EQ(d.error_count(), 0u);
+}
+MIBOT_TEST(test_byte_at_a_time_feed)
