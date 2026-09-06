@@ -621,7 +621,7 @@ static void test_fragment_reassembly() {
     for (size_t i = 0; i + 1 < frags.size(); ++i) {
         EXPECT_TRUE(!r.Feed(frags[i], i * 10, out));
     }
-    EXPECT_TRUE(r.Feed(frags.back(), 1000, out));
+    EXPECT_TRUE(r.Feed(frags.back(), 90, out));  // 距上一片 10ms（计划原文 1000 与上一片静默 920ms>500ms 矛盾，会误触发超时——Task 4 执行时修正）
     EXPECT_TRUE(out.payload == big);
     EXPECT_EQ(out.seq, 42);
     EXPECT_EQ(out.type, kFrameAiRequest);
