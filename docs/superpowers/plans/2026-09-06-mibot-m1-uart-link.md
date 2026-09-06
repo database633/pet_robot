@@ -29,6 +29,9 @@
 **Task 3 质量评审遗留（不阻塞 M1，M2 计划必须落实）**：
 - 帧解码器丢弃假头时不回退重扫：完整假 SOF（AA 55 + 恰能通过版本/长度校验的假头）会吞掉后续真实帧字节且不计数，噪声流下 C++ 端与 Python 对端可能丢不同的帧 → M2 补对等重扫。
 - SEQ 单调性检查（设计 spec 中 frame_codec 职责之一）未纳入 M1 → M2 落实。
+- `FragmentReassembler::Feed` 裸 bool 无法区分超时/换链/乱序/畸形/超限——spec §3.1 的 `E_PAYLOAD_TOO_LARGE` 应答需要知道是超限中止 → M2 改枚举返回。
+- 分片完成后 `assembled.flags = 0` 会丢弃分片帧上的 kAckRequest——M2 写分片发送端前必须决策（ACK 请求是否允许出现在分片帧上）并文档化。
+- 设备侧 RxLoop 全部帧统一走 `frags_.Feed()`（非分片直通），单一分发入口（Task 4 评审建议，已并入 Task 6 计划代码）。
 
 ---
 
@@ -690,7 +693,8 @@ public:
     static constexpr uint32_t kFragmentTimeoutMs = 500;  // 相邻分片最大静默间隔
     static constexpr size_t kMaxAssembled = 64 * 1024;
 
-    // 返回 true 表示 assembled 是完整帧（重组完成或非分片直通）
+    // 返回 true 表示 assembled 是完整帧（重组完成或非分片直通）；返回 false 时 assembled 保证未被修改。
+    // 单任务调用（设备侧 RX 任务），非线程安全。
     bool Feed(const Frame& frag, uint32_t now_ms, Frame& assembled);
     void Reset();
 
@@ -738,10 +742,14 @@ bool FragmentReassembler::Feed(const Frame& frag, uint32_t now_ms, Frame& assemb
         received_ = 0;
         data_.clear();
         size_t est = static_cast<size_t>(total) * frag.payload.size();
-        data_.reserve(est > kMaxAssembled ? kMaxAssembled : est);  // 封顶，防畸形 total 撑爆内存
+        data_.reserve(est > kMaxAssembled ? kMaxAssembled : est);  // 预留封顶仅限制单次 reserve；真实上限由下方 growth guard 强制
     }
     if (index != received_) {  // 只支持按序（UART 保证有序）
         Reset();
+        return false;
+    }
+    if (data_.size() + (frag.payload.size() - 2) > kMaxAssembled) {
+        Reset();  // 超 64KB 上限：弃链（spec §3.1 E_PAYLOAD_TOO_LARGE 的设备侧强制点）
         return false;
     }
     data_.insert(data_.end(), frag.payload.begin() + 2, frag.payload.end());
@@ -1019,14 +1027,10 @@ void MibotUartLink::RxLoop() {
         decoder_.Feed(buf, (size_t)len);
         Frame f;
         while (decoder_.PopFrame(f)) {
-            if (f.flags & FrameFlags::kFragment) {
-                uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-                Frame assembled;
-                if (frags_.Feed(f, now, assembled)) {
-                    handler_(assembled);
-                }
-            } else {
-                handler_(f);
+            uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+            Frame assembled;
+            if (frags_.Feed(f, now, assembled)) {  // 全部帧走同一入口：非分片帧在 Feed 内直通
+                handler_(assembled);
             }
         }
     }
@@ -1619,7 +1623,7 @@ git add -A && git commit -m "mibot: M1 verified end-to-end against PC peer (hell
 ```bash
 # 全部宿主测试（Tasks 1-4）：规范入口（本机无 cmake，用 zig；CMakeLists.txt 仅作可移植备份）
 "D:/Storeroom/GroceryStore/Project_python/.tools/zig-x86_64-windows-0.16.0/zig.exe" c++ -std=c++17 -Wall -Wextra -Imain/boards/mibot -Itest/host test/host/test_main.cpp test/host/test_frame_codec.cpp main/boards/mibot/mibot_frame_codec.cc -o test/host/build/test_mibot.exe && ./test/host/build/test_mibot.exe
-# 预期最终输出：16 tests passed
+# 预期最终输出：19 tests passed（Task 4 修复提交追加 3 个：单分片链、超限弃链、故 16+3）
 ```
 
 ## 后续计划（不在本文件）
