@@ -3,15 +3,12 @@
 #include <cstring>
 
 #include <esp_console.h>
-#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <driver/uart.h>
 
 #include "mibot_config.h"
 #include "mibot_link_service.h"
-
-#define TAG "MibotConsole"
 
 namespace mibot {
 
@@ -28,7 +25,7 @@ static int CmdMibot(int argc, char** argv) {
     return 0;
 }
 
-void StartConsoleTask() {
+static void StartConsoleTask() {
     // REPL 引导同款做法见 main/boards/sensecap-watcher/sensecap_watcher.cc:436
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.max_cmdline_length = 512;

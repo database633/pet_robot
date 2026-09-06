@@ -4,6 +4,7 @@
 #include <esp_timer.h>
 #include <esp_wifi.h>
 #include <cJSON.h>
+#include <cstdio>
 
 #include "mibot_config.h"
 
@@ -19,7 +20,9 @@ void MibotLinkService::Start(mibot::MibotUartLink& link) {
                  [this](const Frame& f) { OnFrame(f); });
 
     // 专用遥测任务：独立栈，避免 esp_timer 共享任务的栈限制
-    xTaskCreate(TelemetryTaskEntry, "mibot_tel", 4096, this, 4, nullptr);
+    // xTaskCreate 成功返回 pdPASS(1) 而非 ESP_OK(0)，转成 esp_err_t 再交给 ESP_ERROR_CHECK
+    BaseType_t tel_ok = xTaskCreate(TelemetryTaskEntry, "mibot_tel", 4096, this, 4, nullptr);
+    ESP_ERROR_CHECK(tel_ok == pdPASS ? ESP_OK : ESP_FAIL);
 }
 
 void MibotLinkService::SendJson(FrameType type, uint8_t flags, uint16_t seq_reply, const std::string& json) {
@@ -56,8 +59,8 @@ void MibotLinkService::OnFrame(const Frame& frame) {
             cJSON_AddItemToArray(caps, cJSON_CreateString("ai_gateway"));
             cJSON_AddItemToArray(caps, cJSON_CreateString("camera"));
             char* json = cJSON_PrintUnformatted(ack);
-            std::string payload(json);
-            cJSON_free(json);
+            std::string payload = json ? std::string(json) : std::string();
+            if (json) cJSON_free(json);
             cJSON_Delete(ack);
             SendJson(mibot::kFrameHelloAck, FrameFlags::kAck, frame.seq, payload);
             ready_ = true;
@@ -67,13 +70,16 @@ void MibotLinkService::OnFrame(const Frame& frame) {
             // PONG：seq 回写 = PING 的 seq，便于对端测 RTT
             SendJson(mibot::kFramePong, FrameFlags::kAck, frame.seq, "{}");
             break;
-        default:
+        default: {
             // M1 尚无 COMMAND/AI 处理：按《规范》§5.3 回 E_UNSUPPORTED
+            char type_hex[8];
+            snprintf(type_hex, sizeof(type_hex), "0x%02x", (unsigned)frame.type);
             SendJson(mibot::kFrameNack, FrameFlags::kError, frame.seq,
                      std::string("{\"schema\":\"mibot.uart.v1\",\"error\":{\"code\":\"E_UNSUPPORTED\","
-                                 "\"message\":\"type 0x") + std::to_string(frame.type) + " not supported in fw " +
+                                 "\"message\":\"type ") + type_hex + " not supported in fw " +
                      MIBOT_FW_VERSION + "\"}}");
             break;
+        }
     }
 }
 
@@ -101,8 +107,8 @@ void MibotLinkService::SendTelemetry() {
     cJSON_AddBoolToObject(wifi, "connected", wifi_connected);
     cJSON_AddNumberToObject(wifi, "rssi_dbm", rssi);
     char* json = cJSON_PrintUnformatted(tel);
-    std::string payload(json);
-    cJSON_free(json);
+    std::string payload = json ? std::string(json) : std::string();
+    if (json) cJSON_free(json);
     cJSON_Delete(tel);
     SendJson(mibot::kFrameTelemetry, 0, tx_seq_++, payload);
 }

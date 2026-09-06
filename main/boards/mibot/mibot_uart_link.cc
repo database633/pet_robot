@@ -28,8 +28,11 @@ void MibotUartLink::Start(int uart_num, int tx_gpio, int rx_gpio, int baud, Fram
     tx_queue_ = xQueueCreate(16, sizeof(Frame*));
     running_ = true;
     // RX 栈 6144：handler 回调里做 cJSON 解析/构建（RX 任务上下文）；TX 无重活 4096 够
-    xTaskCreate(RxTrampoline, "mibot_rx", 6144, this, 5, nullptr);
-    xTaskCreate(TxTrampoline, "mibot_tx", 4096, this, 5, nullptr);
+    // xTaskCreate 成功返回 pdPASS(1) 而非 ESP_OK(0)，转成 esp_err_t 再交给 ESP_ERROR_CHECK
+    BaseType_t rx_ok = xTaskCreate(RxTrampoline, "mibot_rx", 6144, this, 5, nullptr);
+    ESP_ERROR_CHECK(rx_ok == pdPASS ? ESP_OK : ESP_FAIL);
+    BaseType_t tx_ok = xTaskCreate(TxTrampoline, "mibot_tx", 4096, this, 5, nullptr);
+    ESP_ERROR_CHECK(tx_ok == pdPASS ? ESP_OK : ESP_FAIL);
     ESP_LOGI(TAG, "uart%d started @%d tx=%d rx=%d", uart_num_, baud, tx_gpio, rx_gpio);
 }
 
