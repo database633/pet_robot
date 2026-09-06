@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "test_framework.h"
 #include "mibot_frame_codec.h"
 
@@ -140,3 +142,79 @@ static void test_byte_at_a_time_feed() {
     EXPECT_EQ(d.error_count(), 0u);
 }
 MIBOT_TEST(test_byte_at_a_time_feed)
+
+static std::vector<Frame> MakeFragments(uint16_t seq, const std::vector<uint8_t>& data, size_t chunk) {
+    std::vector<Frame> frags;
+    size_t total = (data.size() + chunk - 1) / chunk;
+    for (size_t i = 0; i < total; ++i) {
+        Frame f;
+        f.type = kFrameAiRequest;
+        f.flags = FrameFlags::kFragment;
+        f.seq = seq;
+        f.payload.push_back(static_cast<uint8_t>(total));
+        f.payload.push_back(static_cast<uint8_t>(i));
+        size_t begin = i * chunk;
+        size_t end = std::min(begin + chunk, data.size());
+        f.payload.insert(f.payload.end(), data.begin() + begin, data.begin() + end);
+        frags.push_back(std::move(f));
+    }
+    return frags;
+}
+
+static void test_fragment_reassembly() {
+    std::vector<uint8_t> big(10000);
+    for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<uint8_t>(i & 0xFF);
+    auto frags = MakeFragments(42, big, 1000);
+    FragmentReassembler r;
+    Frame out;
+    for (size_t i = 0; i + 1 < frags.size(); ++i) {
+        EXPECT_TRUE(!r.Feed(frags[i], i * 10, out));
+    }
+    EXPECT_TRUE(r.Feed(frags.back(), 90, out));  // 距上一片 10ms（计划原文 1000 与上一片静默 920ms>500ms 矛盾，会误触发超时）
+    EXPECT_TRUE(out.payload == big);
+    EXPECT_EQ(out.seq, 42);
+    EXPECT_EQ(out.type, kFrameAiRequest);
+    EXPECT_EQ(out.flags, 0);
+}
+MIBOT_TEST(test_fragment_reassembly)
+
+static void test_passthrough_non_fragment() {
+    FragmentReassembler r;
+    Frame in = MakeTestFrame(5, 8);
+    Frame out;
+    EXPECT_TRUE(r.Feed(in, 0, out));
+    EXPECT_TRUE(out.payload == in.payload);
+}
+MIBOT_TEST(test_passthrough_non_fragment)
+
+static void test_fragment_inactivity_timeout() {
+    auto frags = MakeFragments(1, std::vector<uint8_t>(3000, 0xAB), 1000);
+    FragmentReassembler r;
+    Frame out;
+    EXPECT_TRUE(!r.Feed(frags[0], 0, out));     // 开始链（3 片），等 index=1
+    EXPECT_TRUE(!r.Feed(frags[1], 400, out));   // 距上一片 400ms ≤ 500ms，继续
+    EXPECT_TRUE(!r.Feed(frags[2], 1100, out));  // 静默 700ms > 500ms → 弃链；index=2 无法作新链起点 → 丢弃
+    // 全链重发（时间上连续）→ 成功重组
+    EXPECT_TRUE(!r.Feed(frags[0], 1200, out));
+    EXPECT_TRUE(!r.Feed(frags[1], 1300, out));
+    EXPECT_TRUE(r.Feed(frags[2], 1400, out));   // 集齐
+    EXPECT_TRUE(out.payload.size() == 3000u);
+    EXPECT_EQ(out.seq, 1);
+    EXPECT_EQ(out.flags, 0);
+}
+MIBOT_TEST(test_fragment_inactivity_timeout)
+
+static void test_fragment_long_chain_no_timeout() {
+    // 20 片、每片间隔 100ms → 链总时长 1.9s 远超 500ms，但相邻静默均 ≤ 500ms，必须能重组
+    std::vector<uint8_t> big(20000);
+    for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<uint8_t>(i & 0xFF);
+    auto frags = MakeFragments(7, big, 1000);
+    FragmentReassembler r;
+    Frame out;
+    for (size_t i = 0; i < frags.size(); ++i) {
+        bool done = r.Feed(frags[i], static_cast<uint32_t>(i * 100), out);
+        if (i + 1 < frags.size()) EXPECT_TRUE(!done);
+    }
+    EXPECT_TRUE(out.payload == big);
+}
+MIBOT_TEST(test_fragment_long_chain_no_timeout)

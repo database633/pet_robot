@@ -126,4 +126,64 @@ bool FrameDecoder::PopFrame(Frame& out) {
     return true;
 }
 
+bool FragmentReassembler::Feed(const Frame& frag, uint32_t now_ms, Frame& assembled) {
+    if (!(frag.flags & FrameFlags::kFragment)) {
+        assembled = frag;
+        return true;
+    }
+    if (frag.payload.size() < 2) {
+        Reset();
+        return false;
+    }
+    const uint8_t total = frag.payload[0];
+    const uint8_t index = frag.payload[1];
+    if (total == 0 || index >= total) {
+        Reset();
+        return false;
+    }
+    if (active_ && now_ms - last_rx_ms_ > kFragmentTimeoutMs) {
+        Reset();  // 静默超时（无符号减法，自然处理回绕）
+    }
+    if (active_ && (frag.seq != seq_ || frag.type != type_)) {
+        Reset();  // 对端换了链
+    }
+    if (!active_) {
+        if (index != 0) return false;  // 新链必须从第 0 片开始
+        active_ = true;
+        seq_ = frag.seq;
+        type_ = static_cast<uint8_t>(frag.type);
+        total_ = total;
+        received_ = 0;
+        data_.clear();
+        size_t est = static_cast<size_t>(total) * frag.payload.size();
+        data_.reserve(est > kMaxAssembled ? kMaxAssembled : est);  // 封顶，防畸形 total 撑爆内存
+    }
+    if (index != received_) {  // 只支持按序（UART 保证有序）
+        Reset();
+        return false;
+    }
+    data_.insert(data_.end(), frag.payload.begin() + 2, frag.payload.end());
+    last_rx_ms_ = now_ms;
+    ++received_;
+    if (received_ == total_) {
+        assembled.type = static_cast<FrameType>(type_);
+        assembled.flags = 0;
+        assembled.seq = seq_;
+        assembled.payload = std::move(data_);
+        Reset();
+        return true;
+    }
+    return false;
+}
+
+void FragmentReassembler::Reset() {
+    active_ = false;
+    seq_ = 0;
+    type_ = 0;
+    total_ = 0;
+    received_ = 0;
+    last_rx_ms_ = 0;
+    data_.clear();
+}
+
 }  // namespace mibot

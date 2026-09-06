@@ -77,5 +77,28 @@ private:
     std::vector<Frame> frames_;     // 用 vector + 取出索引，避免 deque 依赖
     size_t pop_index_ = 0;
 };
+
+// 分片重组器（语义见 spec §3.1）：
+//  - 非分片帧原样通过（返回 true，assembled=输入帧）
+//  - 分片帧：payload = [total(1B), index(1B)] + data；同 TYPE+SEQ；按序到达
+//  - 相邻分片静默 >500ms / SEQ 或 TYPE 变化 / index 不连续 → 丢弃旧链；新链必须从 index=0 开始
+class FragmentReassembler {
+public:
+    static constexpr uint32_t kFragmentTimeoutMs = 500;  // 相邻分片最大静默间隔
+    static constexpr size_t kMaxAssembled = 64 * 1024;
+
+    // 返回 true 表示 assembled 是完整帧（重组完成或非分片直通）
+    bool Feed(const Frame& frag, uint32_t now_ms, Frame& assembled);
+    void Reset();
+
+private:
+    bool active_ = false;
+    uint16_t seq_ = 0;
+    uint8_t type_ = 0;
+    uint8_t total_ = 0;
+    uint8_t received_ = 0;
+    uint32_t last_rx_ms_ = 0;
+    std::vector<uint8_t> data_;
+};
 }  // namespace mibot
 #endif  // MIBOT_FRAME_CODEC_H
