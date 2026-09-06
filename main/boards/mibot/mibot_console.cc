@@ -18,10 +18,11 @@ static int CmdMibot(int argc, char** argv) {
         return 1;
     }
     MibotLinkService* svc = MibotGetLinkService();
-    printf("fw=%s uart=%d baud=%d tx=%d rx=%d ready=%s\n",
+    printf("fw=%s uart=%d baud=%d tx=%d rx=%d ready=%s errors=%u\n",
            MIBOT_FW_VERSION, MIBOT_UART_NUM, MIBOT_UART_BAUD,
            MIBOT_UART_TX_GPIO, MIBOT_UART_RX_GPIO,
-           (svc && svc->IsReady()) ? "yes" : "no");
+           (svc && svc->IsReady()) ? "yes" : "no",
+           (unsigned)(svc ? svc->ErrorCount() : 0u));
     return 0;
 }
 

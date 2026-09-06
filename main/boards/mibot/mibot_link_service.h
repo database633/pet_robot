@@ -19,6 +19,8 @@ class MibotLinkService {
 public:
     void Start(mibot::MibotUartLink& link);
     bool IsReady() const { return ready_; }  // 收到过 HELLO 即 READY
+    // 解码错误透出（mibot show 诊断用）
+    uint32_t ErrorCount() const { return link_ ? link_->DecoderErrorCount() : 0; }
 
 private:
     void OnFrame(const mibot::Frame& frame);

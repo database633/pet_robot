@@ -22,6 +22,8 @@ public:
 
     void Start(int uart_num, int tx_gpio, int rx_gpio, int baud, FrameHandler handler);
     void Send(const Frame& frame);
+    // 解码/重组错误计数（诊断用；RX 任务递增，console 任务读取——单字对齐读，无撕裂，良性竞态）
+    uint32_t DecoderErrorCount() const { return decoder_.error_count(); }
 
 private:
     void RxLoop();

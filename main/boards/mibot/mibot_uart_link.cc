@@ -47,10 +47,16 @@ void MibotUartLink::Send(const Frame& frame) {
 
 void MibotUartLink::RxLoop() {
     uint8_t buf[512];
+    uint32_t last_errors = 0;
     for (;;) {
         int len = uart_read_bytes((uart_port_t)uart_num_, buf, sizeof(buf), pdMS_TO_TICKS(20));
         if (len <= 0) continue;
         decoder_.Feed(buf, (size_t)len);
+        uint32_t errors = decoder_.error_count();
+        if (errors != last_errors) {
+            ESP_LOGW(TAG, "decoder errors now %u (+%u)", (unsigned)errors, (unsigned)(errors - last_errors));
+            last_errors = errors;
+        }
         Frame f;
         while (decoder_.PopFrame(f)) {
             uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);

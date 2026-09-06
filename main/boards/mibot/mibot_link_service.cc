@@ -51,13 +51,12 @@ void MibotLinkService::OnFrame(const Frame& frame) {
             cJSON* ack = cJSON_CreateObject();
             cJSON_AddStringToObject(ack, "schema", "mibot.uart.v1");
             cJSON_AddNumberToObject(ack, "proto_version", 1);
-            cJSON_AddNumberToObject(ack, "max_frame", 4096);
+            cJSON_AddNumberToObject(ack, "max_payload", 4096);  // 载荷(LEN 字段)上限；线帧总长 = 载荷 + 11
             cJSON_AddStringToObject(ack, "fw_version", MIBOT_FW_VERSION);
             cJSON* caps = cJSON_AddArrayToObject(ack, "capabilities");
-            cJSON_AddItemToArray(caps, cJSON_CreateString("audio_relay"));
-            cJSON_AddItemToArray(caps, cJSON_CreateString("motion"));
-            cJSON_AddItemToArray(caps, cJSON_CreateString("ai_gateway"));
-            cJSON_AddItemToArray(caps, cJSON_CreateString("camera"));
+            // M1 实际能力：仅遥测。audio_relay/motion/ai_gateway/camera 于 M2/M3 随对应固件能力逐项加入，
+            // 避免对端按未支持能力发起 COMMAND（当前一律 NACK E_UNSUPPORTED）。
+            cJSON_AddItemToArray(caps, cJSON_CreateString("telemetry"));
             char* json = cJSON_PrintUnformatted(ack);
             std::string payload = json ? std::string(json) : std::string();
             if (json) cJSON_free(json);
