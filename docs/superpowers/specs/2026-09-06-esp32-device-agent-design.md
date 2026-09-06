@@ -22,6 +22,7 @@
 - Realtime 端到端语音模型
 - 对话历史持久化（跨重启）
 - 多模态视觉对话（"拍照→视觉模型"作为 M4 的扩展工具，不是基础能力）
+- 免唤醒连续对话（回复后自动保持聆听窗口）——v1 每轮对话由唤醒词/按键发起，连续对话列入 §11
 
 ### 1.3 硬件前提
 
@@ -162,9 +163,9 @@ Run(user_text):
         context.AppendAssistant(resp)
         if resp.tool_calls.empty():         # finish_reason == "stop"
             emit(kReply, resp.content); return resp
-        for tc in resp.tool_calls:          # v1 串行执行；工具均为毫秒级
+        for tc in resp.tool_calls:          # 串行执行；本地工具毫秒级，远程工具秒级（§4.5）
             emit(kToolCall, tc.name + " " + tc.arguments)
-            result = registry.Execute(tc.name, tc.arguments)   # 永不抛异常
+            result = registry.Execute(tc.name, tc.arguments, cancel)   # 永不抛异常；受 per-tool 超时约束
             context.AppendToolResult(tc.id, result)
             emit(kToolResult, 摘要)
     # 达到 max_iterations 仍未收敛
@@ -174,7 +175,7 @@ Run(user_text):
 要点：
 
 - **工具错误不终止对话**：`ToolRegistry::Execute` 捕获一切异常/未知工具/参数解析失败，包装为 `{"isError": true}` 形态的文本结果回填，让模型自我纠正（pi 同款行为）。
-- **取消**：`cancel` 原子标志贯穿 transport（HTTP abort）与 loop（轮间检查）；置位后循环退出并 `emit(kAborted)`，context 回滚本次 `user` 消息（工具副作用不回滚，见 §7）。
+- **取消**：`cancel` 原子标志贯穿 transport（HTTP abort）、loop（轮间检查）与工具执行（`Execute` 内部长操作分段检查）；置位后循环退出并 `emit(kAborted)`，context 回滚本次 `user` 消息（工具副作用不回滚，见 §7）。
 - **迭代上限 8**：超出后不继续调模型，直接返回兜底话术并上屏，防止成本失控与死循环。
 
 ### 4.4 AgentContext：历史与裁剪
@@ -208,14 +209,17 @@ Run(user_text):
        void AddTool(ToolDef def);
        const ToolDef* Find(const std::string& name) const;
        std::string SerializeOpenAiTools() const;   // [{"type":"function","function":{...}}]
-       std::string Execute(const std::string& name, const std::string& arguments_json) const;
+       std::string Execute(const std::string& name, const std::string& arguments_json,
+                           const std::atomic<bool>& cancel) const;   // 内置 per-tool 超时（默认 5s）
    };
    void RegisterCommonTools(ToolRegistry& registry);   // 自 mcp_server.cc:33 迁入
    ```
 2. `McpServer::AddCommonTools()` 改为：构造内部 `ToolRegistry` → 调 `RegisterCommonTools()` → 将 `ToolDef` 适配为现有 `McpTool` 对象（`ToolDef::parameters_json` 直接作为 `McpTool::to_json()` 的 `inputSchema`，两者同构）。板卡自定义工具走原 `AddTool` 路径不受影响。
 3. DeviceAgent 持有自己的 `ToolRegistry` 实例，同样调 `RegisterCommonTools()`；若板卡侧将来提供 `RegisterBoardTools(ToolRegistry&)` 钩子则两边同时受益（v1 只保证公共四件套共享）。
 
-`Execute` 语义：`Find` 失败 → `"Error: unknown tool <name>"`；`cJSON_Parse(arguments)` 失败 → `"Error: invalid arguments"`；回调抛异常 → `catch(...)` → `"Error: <what>"`。结果统一为文本（OpenAI tool 消息的 content 即字符串，无需分类型）。
+`Execute` 语义：`Find` 失败 → `"Error: unknown tool <name>"`；`cJSON_Parse(arguments)` 失败 → `"Error: invalid arguments"`；回调抛异常 → `catch(...)` → `"Error: <what>"`。结果统一为文本（OpenAI tool 消息的 content 即字符串，无需分类型）。执行期间分段检查 `cancel` 并施加 per-tool 超时（默认 5s）——本地工具用不到，但这是远程工具（下）能安全接入的前提，也是 barge-in 在工具执行阶段仍然生效的前提。
+
+**远程工具扩展点（设备作为 MCP Client，v2）**：`ToolDef` 的执行形态统一为"入参 JSON → 结果文本"，天然可封装远程调用——`RegisterRemoteMcpTools(registry, endpoint)`（v2）对远端 MCP 服务器（Streamable HTTP 传输，本质为 HTTP POST + JSON-RPC）执行 `initialize`/`tools/list`，将每个远程工具包装为一个 `ToolDef`，其 callback 内完成 `tools/call` 并取回文本结果。**对 loop 与模型而言远程工具与本地工具完全同构，loop 零改动**。代价是远程工具为秒级耗时，故依赖 `Execute` 的超时与 cancel（见上）。工具容量预算：`SerializeOpenAiTools()` 输出 ≤8KB（约 32 个工具），超限拒绝注册并经串口告警——防止远端工具目录撑爆请求体与 token 成本。
 
 ### 4.6 AsrClient
 
@@ -246,6 +250,7 @@ Run(user_text):
 
 - 专属 FreeRTOS task：栈 8KB、优先级 4（低于音频任务），事件队列（`QueueHandle_t`，深度 8）驱动，事件类型 `{kWakeWord, kVadEnd, kOpusPacket(仅指针), kCancel, kSerialText}`。
 - HTTP/cJSON/解码全部在该任务内串行执行；Application 与 AudioService 的实时性不受阻塞。
+- `kOpusPacket` 仅在 `kDeviceStateListening` 有效：Thinking/Idle 期间到达的包直接丢弃（不入累积缓冲），send queue 由既有 drain 逻辑（`application.cc:898`、`application.cc:1090`）清空，防止积压。
 
 状态机映射（复用 `SetDeviceState`，`application.h:78`）：
 
@@ -289,7 +294,7 @@ agent test "帮我把音量调到50"   # 跳过语音直接跑一轮 loop（M1 �
 
 - `esp_http_client`，每请求新建/销毁 client（v1 简单正确；TLS 握手 ≈300-500ms 可接受，keep-alive 复用列入 §11）。
 - 内存：`buffer_size`/`buffer_size_tx` 2KB；`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y` 使 mbedTLS 缓冲尽量落 PSRAM；**同一时刻全局仅一条 TLS 连接**（ASR、LLM 串行，loop 每轮串行）。
-- 请求头：`Authorization: Bearer <key>`、`Content-Type: application/json`。
+- 请求头：`Authorization: Bearer <key>`、`Content-Type: application/json`；TLS 证书校验使用 ESP x509 证书 bundle（`crt_bundle_attach`，IDF `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` 默认开启）——三个服务均为公网 HTTPS，禁止任何跳过校验的退化配置。
 - 非流式响应解析（cJSON）：
   ```json
   {"choices":[{"message":{"role":"assistant","content":null,
@@ -393,6 +398,9 @@ agent test "帮我把音量调到50"   # 跳过语音直接跑一轮 loop（M1 �
 3. **Realtime 语音模型**：新增一种 `LlmTransport` 变体（WS），loop 层协议化改造，属于较大独立立项。
 4. **keep-alive 连接复用**：`llm_openai` 内缓存 client，消握手延迟。
 5. **历史持久化**：AgentContext 落 NVS/littlefs 快照。
+6. **远程 MCP 工具**：设备作为 MCP Client 接入外部 MCP 服务器（扩展点见 §4.5）——智能家居、搜索、邮件等能力直达设备端 agent，无需任何自有服务器。扩展点为 `RegisterRemoteMcpTools(registry, endpoint)`，实现前接口已兼容。
+7. **Skill 机制**：Skill = {system prompt 片段, 工具组, 可选远程 MCP 端点} 的配置化组合，存 assets/NVS；启用时 DeviceAgent 拼装——prompt 片段追加进 system（AgentContext 需支持多片段拼接，小改），工具组注册进 ToolRegistry（零改动），loop 不变。**边界**：ESP32 无法动态装载代码，Skill 的"可执行部分"只能以固件内置工具或远程 MCP 工具存在；设备上的 Skill 本质是"配置 + 提示词 + 工具清单"。
+8. **免唤醒连续对话**：回复后保持 N 秒聆听窗口，VAD 断句后直接再入 loop。
 
 ---
 
