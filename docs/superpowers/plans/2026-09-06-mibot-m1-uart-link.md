@@ -32,6 +32,7 @@
 - `FragmentReassembler::Feed` 裸 bool 无法区分超时/换链/乱序/畸形/超限——spec §3.1 的 `E_PAYLOAD_TOO_LARGE` 应答需要知道是超限中止 → M2 改枚举返回。
 - 分片完成后 `assembled.flags = 0` 会丢弃分片帧上的 kAckRequest——M2 写分片发送端前必须决策（ACK 请求是否允许出现在分片帧上）并文档化。
 - 设备侧 RxLoop 全部帧统一走 `frags_.Feed()`（非分片直通），单一分发入口（Task 4 评审建议，已并入 Task 6 计划代码）。
+- 链起点处 `reserve(min(est,64KB))` 仍可能被恶意首分片（total=255 + 4096B payload）触发一次 64KB 连续分配，`-fno-exceptions` 下分配失败即 abort——M2 移除预留（vector 增长摊销足够）以彻底消除该 abort 向量。
 
 ---
 
