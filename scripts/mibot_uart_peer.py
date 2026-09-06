@@ -4,6 +4,7 @@
 用法：
   python mibot_uart_peer.py COM5 hello          # 发 HELLO，等待 HELLO_ACK
   python mibot_uart_peer.py COM5 ping 10        # 发 10 帧 PING，统计 RTT
+  python mibot_uart_peer.py COM5 frag 512       # 发分片 PING（默认 512B），验证设备侧重组
   python mibot_uart_peer.py COM5 telemetry 20   # 观察 20 秒 TELEMETRY
 需要: pip install pyserial
 """
@@ -36,6 +37,12 @@ def crc16_ccitt_false(data: bytes) -> int:
 def encode(ftype: int, flags: int, seq: int, payload: bytes) -> bytes:
     body = struct.pack("<BBBHH", VERSION, ftype, flags, seq, len(payload)) + payload
     return SOF + body + struct.pack("<H", crc16_ccitt_false(body))
+
+
+def encode_fragments(ftype: int, flags: int, seq: int, payload: bytes, chunk: int = 128) -> list:
+    """按设备侧 FragmentReassembler 线格式切分：每片 payload = [total, index] + data"""
+    chunks = [payload[i:i + chunk] for i in range(0, len(payload), chunk)] or [b""]
+    return [encode(ftype, FLAG_FRAGMENT, seq, bytes([len(chunks), i]) + c) for i, c in enumerate(chunks)]
 
 
 class Decoder:
@@ -74,6 +81,9 @@ class Decoder:
 
 
 def main():
+    if len(sys.argv) < 3:
+        print(__doc__)
+        sys.exit(1)
     port, command = sys.argv[1], sys.argv[2]
     arg = sys.argv[3] if len(sys.argv) > 3 else None
     ser = serial.Serial(port, 921600, timeout=0.1)
@@ -110,6 +120,30 @@ def main():
                 print(f"ping {i}: TIMEOUT")
         if rtts:
             print(f"rtt min/avg/max = {min(rtts):.1f}/{sum(rtts)/len(rtts):.1f}/{max(rtts):.1f} ms ({len(rtts)}/{count})")
+
+    elif command == "frag":
+        # 分片 PING：验证设备侧 FragmentReassembler 重组（收到 PONG 即说明重组成功并应答）
+        size = int(arg or 512)
+        if not 1 <= size <= 4096:
+            sys.exit("frag size must be 1..4096 (max_payload)")
+        seq = 9  # 任意定值即可；设备按 TYPE+SEQ 聚链，PONG 回写同 seq
+        reps = (size + 255) // 256
+        payload = (bytes(range(256)) * reps)[:size]  # 确定性图样，便于逐字节比对
+        frags = encode_fragments(TYPE_PING, FLAG_FRAGMENT, seq, payload)
+        print(f"frag seq={seq}: sending {len(frags)} fragments ({len(payload)} bytes)")
+        t0 = time.time()
+        for fr in frags:
+            ser.write(fr)
+            time.sleep(0.01)  # 片间隔远小于 500ms 分片静默超时
+        got = False
+        while time.time() - t0 < 2 and not got:
+            for ftype, flags, pseq, _ in rx():
+                if ftype == TYPE_PONG and pseq == seq:
+                    got = True
+        if got:
+            print(f"frag seq={seq}: OK ({len(frags)} fragments, rtt {(time.time() - t0) * 1000:.1f} ms)")
+        else:
+            print(f"frag seq={seq}: TIMEOUT")
 
     elif command == "telemetry":
         seconds = int(arg or 20)
