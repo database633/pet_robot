@@ -1287,8 +1287,8 @@ git commit -m "mibot: link service with HELLO/PING/TELEMETRY session layer"
 `main/boards/mibot/mibot_console.h`：
 
 ```cpp
-#ifndef _MIBOT_CONSOLE_H_
-#define _MIBOT_CONSOLE_H_
+#ifndef MIBOT_CONSOLE_H
+#define MIBOT_CONSOLE_H
 
 class MibotLinkService;  // 全局类，定义在 mibot_link_service.h
 
