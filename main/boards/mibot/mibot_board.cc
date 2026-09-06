@@ -6,8 +6,12 @@
 #include "mibot_config.h"
 #include "mibot_uart_link.h"
 #include "mibot_link_service.h"
+#include "mibot_console.h"
 
 #define TAG "MibotBoard"
+
+static MibotLinkService* g_mibot_link_service = nullptr;
+MibotLinkService* MibotGetLinkService() { return g_mibot_link_service; }
 
 // Mibot ESP32-S3：AI 网关 + 运动安全执行器（M1 仅骨架）。
 // 无本地麦克风/喇叭/屏幕：Display 用基类 NoDisplay，音频用 DummyAudioCodec
@@ -21,7 +25,9 @@ private:
 public:
     MibotBoard() {
         ESP_LOGI(TAG, "Mibot ESP32-S3 board init, fw=%s", MIBOT_FW_VERSION);
-        link_service_.Start(uart_link_);  // M1：链路服务随板卡启动（不依赖 Wi-Fi）
+        g_mibot_link_service = &link_service_;
+        link_service_.Start(uart_link_);
+        mibot::StartConsoleTaskAsync();
     }
 
     ~MibotBoard() override = default;
