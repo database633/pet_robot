@@ -24,6 +24,7 @@
 - RX 任务上下文只做"解码 + 分发"；M2 的 COMMAND 执行（含最长 5s 的工具执行）必须投递到独立执行任务，否则会阻塞 HELLO/PONG/TELEMETRY。
 - `Send()` 每帧一次堆分配（`new Frame`）；M2 引入 50Hz 音频帧后改内存池/双队列。
 - M1 不提供链路 Stop/重启（与板卡同生命周期）；M2 若需错误恢复，按 `running_` 标志 + 任务自退出方式补。
+- **首次配网入口缺失**：M1 板卡无按键无屏幕，NVS 无 Wi-Fi 凭据时无法进入/完成配网（xiaozhi 配网靠板卡按钮触发）。M1 验证用预烧录凭据（`idf.py monitor` 下临时方案或提前 `nvs` 写入）；M2 必须补配网通道（UART 命令触发配网或保留 BOOT 键）。
 
 ---
 
@@ -296,7 +297,7 @@ static Frame MakeTestFrame(uint16_t seq, size_t payload_len) {
 static void test_encode_layout() {
     Frame f = MakeTestFrame(0x1234, 2);
     auto bytes = EncodeFrame(f);
-    EXPECT_EQ(bytes.size(), 13);  // 9B 头(SOF2+VER+TYPE+FLAGS+SEQ2+LEN2) + 2B payload + 2B CRC
+    EXPECT_EQ(bytes.size(), 13u);  // 9B 头(SOF2+VER+TYPE+FLAGS+SEQ2+LEN2) + 2B payload + 2B CRC
     EXPECT_EQ(bytes[0], 0xAA);
     EXPECT_EQ(bytes[1], 0x55);
     EXPECT_EQ(bytes[2], kFrameVersion);
@@ -357,7 +358,7 @@ static void test_bad_crc_dropped() {
     d.Feed(bytes.data(), bytes.size());
     Frame out;
     EXPECT_TRUE(!d.PopFrame(out));
-    EXPECT_EQ(d.error_count(), 1);
+    EXPECT_EQ(d.error_count(), 1u);
 }
 MIBOT_TEST(test_bad_crc_dropped)
 
@@ -367,7 +368,7 @@ static void test_oversize_length_dropped() {
     d.Feed(bytes.data(), bytes.size());
     Frame out;
     EXPECT_TRUE(!d.PopFrame(out));
-    EXPECT_EQ(d.error_count(), 1);
+    EXPECT_EQ(d.error_count(), 1u);
 }
 MIBOT_TEST(test_oversize_length_dropped)
 ```
@@ -638,7 +639,7 @@ static void test_fragment_inactivity_timeout() {
     EXPECT_TRUE(!r.Feed(frags[0], 1200, out));
     EXPECT_TRUE(!r.Feed(frags[1], 1300, out));
     EXPECT_TRUE(r.Feed(frags[2], 1400, out));   // 集齐
-    EXPECT_TRUE(out.payload.size() == 3000);
+    EXPECT_TRUE(out.payload.size() == 3000u);
     EXPECT_EQ(out.seq, 1);
     EXPECT_EQ(out.flags, 0);
 }
@@ -921,7 +922,7 @@ git commit -m "mibot: board skeleton registered as BOARD_TYPE_MIBOT_ESP32S3"
 namespace mibot {
 
 // 设备侧 UART 链路（M1）：
-//  - RX 任务：轮询读字节 → FrameDecoder → 分片重组 → handler 回调（RX 任务上下文执行）
+//  - RX 任务：轮询读字节 → FrameDecoder → 分片重组 → handler 回调（RX 任务上下文执行，含 cJSON，栈 6144）
 //  - TX 任务：Send() 拷贝入队 → 编码写出；队列满直接丢弃（重传是上层职责）
 // M1 不提供 Stop：链路与板卡同生命周期；M2 若需错误恢复再按 running_ 标志 + 任务自退出补。
 class MibotUartLink {
@@ -983,7 +984,8 @@ void MibotUartLink::Start(int uart_num, int tx_gpio, int rx_gpio, int baud, Fram
 
     tx_queue_ = xQueueCreate(16, sizeof(Frame*));
     running_ = true;
-    xTaskCreate(RxTrampoline, "mibot_rx", 4096, this, 5, nullptr);
+    // RX 栈 6144：handler 回调里做 cJSON 解析/构建（RX 任务上下文）；TX 无重活 4096 够
+    xTaskCreate(RxTrampoline, "mibot_rx", 6144, this, 5, nullptr);
     xTaskCreate(TxTrampoline, "mibot_tx", 4096, this, 5, nullptr);
     ESP_LOGI(TAG, "uart%d started @%d tx=%d rx=%d", uart_num_, baud, tx_gpio, rx_gpio);
 }
@@ -1069,7 +1071,8 @@ git commit -m "mibot: uart link rx/tx tasks with frame decoder and fragment reas
 #include <atomic>
 #include <string>
 
-#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "mibot_frame_codec.h"
 #include "mibot_uart_link.h"
@@ -1077,6 +1080,8 @@ git commit -m "mibot: uart link rx/tx tasks with frame decoder and fragment reas
 // 会话层（spec §3）：HELLO→HELLO_ACK、PING→PONG（seq 回写用于测 RTT）、
 // 1Hz TELEMETRY、未支持帧→NACK(E_UNSUPPORTED)。M1 无真实遥测源：
 // motion_state 固定 MOTION_INIT，tof/servo 为 null，battery_mv=0。
+// 遥测用专用任务（vTaskDelayUntil），不用 esp_timer：esp_timer 回调跑在
+// 共享的小栈任务里，cJSON 构建 + WiFi 查询有栈溢出风险。
 class MibotLinkService {
 public:
     void Start(mibot::MibotUartLink& link);
@@ -1086,12 +1091,12 @@ private:
     void OnFrame(const mibot::Frame& frame);
     void SendTelemetry();
     void SendJson(mibot::FrameType type, uint8_t flags, uint16_t seq_reply, const std::string& json);
-    static void TelemetryTimerCb(void* arg);
+    static void TelemetryTaskEntry(void* arg);
+    void TelemetryLoop();
 
     mibot::MibotUartLink* link_ = nullptr;
     uint16_t tx_seq_ = 0;
     std::atomic<bool> ready_{false};
-    esp_timer_handle_t telemetry_timer_ = nullptr;
 };
 
 #endif
@@ -1121,15 +1126,8 @@ void MibotLinkService::Start(mibot::MibotUartLink& link) {
     link_->Start(MIBOT_UART_NUM, MIBOT_UART_TX_GPIO, MIBOT_UART_RX_GPIO, MIBOT_UART_BAUD,
                  [this](const Frame& f) { OnFrame(f); });
 
-    const esp_timer_create_args_t timer_args = {
-        .callback = TelemetryTimerCb,
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "mibot_tel",
-        .skip_unhandled_events = true,
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &telemetry_timer_));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(telemetry_timer_, 1000 * 1000));  // 1Hz
+    // 专用遥测任务：独立栈，避免 esp_timer 共享任务的栈限制
+    xTaskCreate(TelemetryTaskEntry, "mibot_tel", 4096, this, 4, nullptr);
 }
 
 void MibotLinkService::SendJson(FrameType type, uint8_t flags, uint16_t seq_reply, const std::string& json) {
@@ -1217,8 +1215,16 @@ void MibotLinkService::SendTelemetry() {
     SendJson(mibot::kFrameTelemetry, 0, tx_seq_++, payload);
 }
 
-void MibotLinkService::TelemetryTimerCb(void* arg) {
-    static_cast<MibotLinkService*>(arg)->SendTelemetry();
+void MibotLinkService::TelemetryTaskEntry(void* arg) {
+    static_cast<MibotLinkService*>(arg)->TelemetryLoop();
+}
+
+void MibotLinkService::TelemetryLoop() {
+    TickType_t last_wake = xTaskGetTickCount();
+    for (;;) {
+        SendTelemetry();
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));  // 1Hz，不漂移
+    }
 }
 ```
 
@@ -1578,6 +1584,7 @@ Expected: `rtt min/avg/max = x/y/z ms (50/50)`，无 TIMEOUT，无 decode CRC er
 
 Run: `python scripts/mibot_uart_peer.py <COMx> telemetry 10`
 Expected: 约 10 行 JSON，每行含 `"schema":"mibot.telemetry.v1"`、`"motion_state":"MOTION_INIT"`、`"wifi":{...}`；1 秒一行节奏。
+说明：`wifi.connected` 为 `false` 是**预期内的**——M1 板卡无按键无屏幕，NVS 无凭据时无法配网（见头部"前向约束"第 4 条）；本验证不依赖 Wi-Fi，仅要求 `esp_wifi_sta_get_ap_info` 失败路径不崩溃。若需 `true`，先在 idf.py monitor/配网流程写入凭据。
 
 - [ ] **Step 5: CRC/乱流鲁棒性抽查**
 
