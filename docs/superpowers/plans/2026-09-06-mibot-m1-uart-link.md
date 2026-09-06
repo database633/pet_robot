@@ -1179,13 +1179,12 @@ void MibotLinkService::OnFrame(const Frame& frame) {
             cJSON* ack = cJSON_CreateObject();
             cJSON_AddStringToObject(ack, "schema", "mibot.uart.v1");
             cJSON_AddNumberToObject(ack, "proto_version", 1);
-            cJSON_AddNumberToObject(ack, "max_frame", 4096);
+            cJSON_AddNumberToObject(ack, "max_payload", 4096);  // 载荷(LEN 字段)上限；线帧总长 = 载荷 + 11（终审 F3 改名）
             cJSON_AddStringToObject(ack, "fw_version", MIBOT_FW_VERSION);
             cJSON* caps = cJSON_AddArrayToObject(ack, "capabilities");
-            cJSON_AddItemToArray(caps, cJSON_CreateString("audio_relay"));
-            cJSON_AddItemToArray(caps, cJSON_CreateString("motion"));
-            cJSON_AddItemToArray(caps, cJSON_CreateString("ai_gateway"));
-            cJSON_AddItemToArray(caps, cJSON_CreateString("camera"));
+            // M1 实际能力：仅遥测（终审 F4）。audio_relay/motion/ai_gateway/camera 于 M2/M3 随对应固件能力逐项加入，
+            // 避免对端按未支持能力发起 COMMAND（当前一律 NACK E_UNSUPPORTED）。
+            cJSON_AddItemToArray(caps, cJSON_CreateString("telemetry"));
             char* json = cJSON_PrintUnformatted(ack);
             std::string payload(json);
             cJSON_free(json);
@@ -1599,7 +1598,7 @@ Run: `idf.py -p <PORT> flash monitor`
 - [ ] **Step 2: HELLO/HELLO_ACK 验证**
 
 Run: `python scripts/mibot_uart_peer.py <COMx> hello`
-Expected: 打印 `HELLO_ACK seq=1 flags=0x02: {"schema":"mibot.uart.v1","proto_version":1,"max_frame":4096,"fw_version":"0.1.0","capabilities":[...]}`
+Expected: 打印 `HELLO_ACK seq=1 flags=0x02: {"schema":"mibot.uart.v1","proto_version":1,"max_payload":4096,"fw_version":"0.1.0","capabilities":["telemetry"]}`
 设备日志（`ESP_LOGI`）出现 `HELLO from SF32, fw=peer-sim-0.1`。
 
 - [ ] **Step 3: PING/PONG RTT 验证**
