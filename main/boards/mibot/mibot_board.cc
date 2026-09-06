@@ -29,4 +29,4 @@ public:
     // M2（运动安全）再覆写 SetPowerSaveLevel 保持 Wi-Fi 常连接。
 };
 
-DECLARE_BOARD(MibotBoard)
+DECLARE_BOARD(MibotBoard);
